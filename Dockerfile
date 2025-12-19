@@ -1,8 +1,19 @@
 # 多阶段构建 Dockerfile for fishpi-badge-rust
 # 支持多架构: linux/amd64, linux/arm64
 
+# ============ 依赖规划阶段 ============
+FROM rust:1.91.0-slim AS chef
+RUN cargo install cargo-chef
+WORKDIR /app
+
+# ============ 依赖分析阶段 ============
+FROM chef AS planner
+COPY Cargo.toml ./
+COPY src ./src
+RUN cargo chef prepare --recipe-path recipe.json
+
 # ============ 构建阶段 ============
-FROM rust:1.91.0-slim AS builder
+FROM chef AS builder
 
 # 安装构建依赖
 RUN apt-get update && apt-get install -y \
@@ -14,21 +25,14 @@ RUN apt-get update && apt-get install -y \
 # 设置工作目录
 WORKDIR /app
 
-# 复制依赖文件
+# 复制依赖配方并构建依赖（这一层会被缓存）
+COPY --from=planner /app/recipe.json recipe.json
+RUN cargo chef cook --release --recipe-path recipe.json
+
+# 复制源代码并构建应用
 COPY Cargo.toml ./
-
-# 创建虚拟 src 用于缓存依赖
-RUN mkdir src && \
-    echo "fn main() {}" > src/main.rs && \
-    cargo build --release && \
-    rm -rf src
-
-# 复制源代码
 COPY src ./src
-
-# 构建应用（清除虚拟构建缓存后重新编译，并优化大小）
-RUN rm -rf target/release/deps/fishpi_badge_rust* && \
-    cargo build --release && \
+RUN cargo build --release && \
     strip target/release/fishpi-badge-rust
 
 # ============ 运行阶段 ============
